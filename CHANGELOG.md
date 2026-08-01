@@ -3,6 +3,77 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.3.0 — 2026-08-01
+
+Wave 1 #2 of the Etch parallel chain roadmap. Adds five flags that
+sign a bounded authority claim locally with an Ed25519 private key and
+attach it to any event on the Etch parallel chain, cross-referencing
+the OSS event by its ID.
+
+Server-side dependency: the etch server MUST run commit `127b3f7` or
+later. The pubkey MUST be registered in advance via the operator CLI:
+
+```
+etch add-authority-key <project_id> <authority_id> <pubkey_hex>
+```
+
+Generate a key on your side:
+
+```
+openssl genpkey -algorithm ed25519 -out authority.pem
+openssl pkey -in authority.pem -pubout -outform DER \
+  | tail -c 32 | xxd -p -c 32
+```
+
+### Added
+
+- `--authority-privkey-file <path>` — Ed25519 private key in PEM
+  format. Client signs the canonical JSON of the claim locally; the
+  key never leaves your machine.
+- `--authority-id <string>` — human-readable identity, must match the
+  authority_id used when the pubkey was registered.
+- `--authority-scope <s1,s2,...>` — comma-separated scope tags.
+- `--authority-expires-at <ISO 8601>` — optional expiration.
+- `--receipt-type <vested_authority | hitl_approval | automated_by_policy>`
+- New module `etch_record.authority_client` with `load_ed25519_privkey`,
+  `derive_pubkey_hex`, `compute_key_ref`, `sign_claim`, and
+  `record_authority_receipt`.
+- New exit code `6` — authority sub-record failed. Base event (and
+  governance, if requested) succeeded; retry the receipt with the
+  printed `event_id`.
+
+### Changed
+
+- Governance now runs even when authority flags are set (previously
+  the CLI returned after governance; that broke the three-call
+  composition). Governance-only invocations behave identically to
+  v0.2.1.
+
+### Added dependency
+
+- `cryptography>=42` (Ed25519 signing).
+
+### Example
+
+```
+etch-record "KYC decision on customer XYZ" \
+  --tags kyc,fintech,decision \
+  --policy-hash sha256:9f8c... \
+  --uncertainty '0.87:hash-lookup-match-rate' \
+  --authority-privkey-file ~/keys/compliance.pem \
+  --authority-id compliance-officer-2 \
+  --authority-scope kyc-decisions,pii-approvals \
+  --receipt-type hitl_approval
+```
+
+Three OK lines expected on success:
+
+```
+OK  session=etch-record-2026-08-01  event_id=abc-def-123
+OK  governance_seq=1  governance_hash=sha256:...
+OK  authority_seq=1   authority_hash=sha256:...
+```
+
 ## v0.2.1 — 2026-08-01
 
 Cosmetic patch. The `etch-record --version` string and the MCP

@@ -21,10 +21,22 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .authority_client import (
+    AuthorityError,
+    compute_key_ref,
+    derive_pubkey_hex,
+    load_ed25519_privkey,
+    record_authority_receipt,
+    sign_claim,
+    utc_iso_ms_now,
+)
 from .config import ConfigError, load
 from .governance_client import GovernanceError, record_governance
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
+
+
+_RECEIPT_TYPES = ("vested_authority", "hitl_approval", "automated_by_policy")
 
 
 _LARGE_ARG_THRESHOLD_CHARS = 4096
@@ -384,6 +396,71 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "entry is {\"if\": ..., \"then\": ...}."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 1 #2 (2026-08-01) — bounded authority receipts.
+# When --authority-privkey-file + --authority-id + --receipt-type are all
+# set, the CLI adds a THIRD call:
+#   3. authority_client.record_authority_receipt → attaches a signed
+#      authority receipt to the Etch chain, cross-referencing the OSS
+#      event by id, signed with the local Ed25519 privkey.
+# Server verifies the signature against a pubkey the operator registered
+# via `etch add-authority-key`. Exit code 6 on receipt failure (base +
+# governance succeeded).
+# ---------------------------------------------------------------------------
+@click.option(
+    "--authority-privkey-file",
+    "authority_privkey_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 1 #2 authority receipt: path to an Ed25519 private key in "
+        "PEM format. Generate with `openssl genpkey -algorithm ed25519 "
+        "-out authority.pem`. The corresponding pubkey must be "
+        "registered on the project via `etch add-authority-key`."
+    ),
+)
+@click.option(
+    "--authority-id",
+    "authority_id",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #2 authority receipt: human-readable authority identity "
+        "(e.g. 'compliance-officer-2'). Must match the authority_id used "
+        "when the pubkey was registered server-side."
+    ),
+)
+@click.option(
+    "--authority-scope",
+    "authority_scope",
+    type=str,
+    default="",
+    help=(
+        "Wave 1 #2 authority receipt: comma-separated scope tags this "
+        "authority was bounded to (e.g. 'kyc-decisions,pii-approvals'). "
+        "Empty = any."
+    ),
+)
+@click.option(
+    "--authority-expires-at",
+    "authority_expires_at",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #2 authority receipt: ISO 8601 UTC when the authority "
+        "itself expires. Optional — omit for standing authority."
+    ),
+)
+@click.option(
+    "--receipt-type",
+    "receipt_type",
+    type=click.Choice(_RECEIPT_TYPES),
+    default=None,
+    help=(
+        "Wave 1 #2 authority receipt: which flavor of authority was "
+        "invoked. Required whenever --authority-privkey-file is set."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -406,6 +483,11 @@ def main(
     uncertainty: str | None,
     uncertainty_file: Path | None,
     invalidation_file: Path | None,
+    authority_privkey_file: Path | None,
+    authority_id: str | None,
+    authority_scope: str,
+    authority_expires_at: str | None,
+    receipt_type: str | None,
 ) -> None:
     tags = _parse_tags(tags_raw)
     evidence = _load_evidence(evidence_json, evidence_file)
@@ -508,22 +590,55 @@ def main(
         uncertainty_file=uncertainty_file,
         invalidation_file=invalidation_file,
     )
-    if governance is None:
+    if governance is not None:
+        try:
+            result = record_governance(cfg, event_id, governance)
+        except GovernanceError as exc:
+            click.echo(f"etch-record: governance-record: {exc}", err=True)
+            # Base event was recorded successfully; the governance
+            # sub-record failed. Exit non-zero so shell callers can
+            # catch it, but keep the earlier OK line above so the
+            # caller has the event_id to retry against.
+            sys.exit(5)
+        click.echo(
+            f"OK  governance_seq={result.etch_chain_seq}  "
+            f"governance_hash={result.governance_hash}",
+        )
+
+    # Wave 1 #2 — if the authority-receipt flags were set, sign the
+    # claim locally with the Ed25519 privkey and POST to the Etch
+    # chain authority-receipt endpoint. Independent of Wave 1 #1;
+    # callers can attach a receipt without a governance object and
+    # vice versa.
+    authority_claim, priv, pubkey_ref = _prepare_authority_receipt(
+        authority_privkey_file=authority_privkey_file,
+        authority_id=authority_id,
+        authority_scope=authority_scope,
+        authority_expires_at=authority_expires_at,
+        receipt_type=receipt_type,
+    )
+    if authority_claim is None:
         return
 
+    signature_hex = sign_claim(priv, authority_claim)
     try:
-        result = record_governance(cfg, event_id, governance)
-    except GovernanceError as exc:
-        click.echo(f"etch-record: governance-record: {exc}", err=True)
-        # Base event was recorded successfully; the governance sub-record
-        # failed. Exit non-zero so shell callers can catch it, but keep
-        # the earlier OK line above so the caller has the event_id to
-        # retry against.
-        sys.exit(5)
+        auth_result = record_authority_receipt(
+            cfg=cfg,
+            oss_event_id=event_id,
+            claim=authority_claim,
+            signature_hex=signature_hex,
+            pubkey_ref=pubkey_ref,
+        )
+    except AuthorityError as exc:
+        click.echo(f"etch-record: authority-receipt: {exc}", err=True)
+        # Base event (and governance, if requested) succeeded. Exit 6
+        # so shell callers can distinguish a receipt failure from a
+        # governance failure (exit 5) or an MCP-layer failure (exit 2).
+        sys.exit(6)
 
     click.echo(
-        f"OK  governance_seq={result.etch_chain_seq}  "
-        f"governance_hash={result.governance_hash}",
+        f"OK  authority_seq={auth_result.etch_chain_seq}  "
+        f"authority_hash={auth_result.authority_hash}",
     )
 
 
@@ -617,3 +732,66 @@ def _parse_uncertainty_inline(raw: str) -> dict:
     if not basis:
         raise click.UsageError("--uncertainty basis must be non-empty.")
     return {"confidence": confidence, "basis": basis}
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 #2 authority-receipt helpers
+# ---------------------------------------------------------------------------
+
+
+def _prepare_authority_receipt(
+    authority_privkey_file: Path | None,
+    authority_id: str | None,
+    authority_scope: str,
+    authority_expires_at: str | None,
+    receipt_type: str | None,
+):
+    """Assemble the AuthorityClaim + load the privkey, or return
+    (None, None, None) if the authority-receipt flags were not set.
+
+    All-or-nothing: if any authority flag is set, all required ones must
+    be set. Enforces the invariant that a partial invocation surfaces as
+    a usage error, not a silently-dropped receipt.
+    """
+    provided = any((
+        authority_privkey_file, authority_id, receipt_type,
+        authority_scope, authority_expires_at,
+    ))
+    if not provided:
+        return None, None, None
+
+    missing = []
+    if authority_privkey_file is None:
+        missing.append("--authority-privkey-file")
+    if authority_id is None:
+        missing.append("--authority-id")
+    if receipt_type is None:
+        missing.append("--receipt-type")
+    if missing:
+        raise click.UsageError(
+            "Wave 1 #2 authority receipt requires: "
+            + ", ".join(missing)
+            + " (any authority flag triggers all-required validation)",
+        )
+
+    try:
+        priv = load_ed25519_privkey(authority_privkey_file)
+    except Exception as exc:  # noqa: BLE001
+        raise click.UsageError(str(exc)) from exc
+    pubkey_hex = derive_pubkey_hex(priv)
+    pubkey_ref = compute_key_ref(pubkey_hex)
+
+    scope_list = [
+        s.strip() for s in authority_scope.split(",") if s.strip()
+    ] if authority_scope else []
+
+    claim = {
+        "authority_id": authority_id,
+        "scope": scope_list,
+        "receipt_type": receipt_type,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if authority_expires_at is not None:
+        claim["expires_at"] = authority_expires_at
+
+    return claim, priv, pubkey_ref
