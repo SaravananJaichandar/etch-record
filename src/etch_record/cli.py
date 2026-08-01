@@ -36,6 +36,11 @@ from .authority_client import (
 )
 from .config import ConfigError, load
 from .governance_client import GovernanceError, record_governance
+from .import_client import (
+    ImportError as BulkImportError,
+    import_events,
+    read_events_from_file,
+)
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
 from .wave1_4567_clients import (
@@ -641,6 +646,30 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "whenever --dissent-privkey-file is set."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 2 #8 (2026-08-02) — bulk import mode
+# ---------------------------------------------------------------------------
+@click.option(
+    "--import-format", "import_format",
+    type=click.Choice(("otel-gen-ai", "custom")),
+    default=None,
+    help=(
+        "Wave 2 #8 ingest-adapter: format of the events in the file "
+        "passed via --import-file. Switches etch-record into bulk "
+        "import mode; the positional description arg and every Wave 1 "
+        "sub-record flag are ignored when import mode is active."
+    ),
+)
+@click.option(
+    "--import-file", "import_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 2 #8: path to a file containing events. Accepts .jsonl "
+        "(one JSON object per line), .json array, or .json object "
+        "with an 'events' key. Max 500 events per file."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -685,7 +714,16 @@ def main(
     dissent_privkey_file: Path | None,
     dissenter_id: str | None,
     dissent_rationale: str | None,
+    import_format: str | None,
+    import_file: Path | None,
 ) -> None:
+    # Wave 2 #8 — bulk import mode. Runs the file through the format
+    # adapter server-side; single-event flow is completely skipped
+    # when this branch runs. All Wave 1 sub-record flags are ignored.
+    if import_format is not None or import_file is not None:
+        _run_import_mode(import_format, import_file)
+        return
+
     tags = _parse_tags(tags_raw)
     evidence = _load_evidence(evidence_json, evidence_file)
     session = session_id or _default_session_id()
@@ -1018,6 +1056,59 @@ def _parse_uncertainty_inline(raw: str) -> dict:
     if not basis:
         raise click.UsageError("--uncertainty basis must be non-empty.")
     return {"confidence": confidence, "basis": basis}
+
+
+# ---------------------------------------------------------------------------
+# Wave 2 #8 bulk import mode
+# ---------------------------------------------------------------------------
+
+
+def _run_import_mode(
+    import_format: str | None,
+    import_file: Path | None,
+) -> None:
+    """Read the events file, POST to /v1/import, print the summary.
+    Exits directly on any error via click / sys.exit — never returns
+    to the single-event flow."""
+    if import_format is None:
+        raise click.UsageError(
+            "--import-file requires --import-format "
+            "(otel-gen-ai | custom).",
+        )
+    if import_file is None:
+        raise click.UsageError(
+            "--import-format requires --import-file <path>.",
+        )
+    try:
+        events = read_events_from_file(import_file)
+    except BulkImportError as exc:
+        click.echo(f"etch-record: import: {exc}", err=True)
+        sys.exit(12)
+
+    try:
+        cfg = load()
+    except ConfigError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+
+    try:
+        result = import_events(cfg, import_format, events)
+    except BulkImportError as exc:
+        click.echo(f"etch-record: import: {exc}", err=True)
+        sys.exit(12)
+
+    click.echo(
+        f"OK  imported={result.count}  "
+        f"kinds={dict(sorted(result.kinds.items()))}  "
+        f"seq_range=[{result.first_etch_chain_seq}, "
+        f"{result.last_etch_chain_seq}]",
+    )
+    if result.skipped:
+        click.echo(
+            f"    skipped={len(result.skipped)} events "
+            f"(first={result.skipped[0] if result.skipped else None})",
+            err=True,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,62 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.6.0 — 2026-08-02
+
+Wave 2 #8. Adds bulk import mode. `etch-record --import-format
+<fmt> --import-file <path>` reads a file of external-format events
+and POSTs them as a batch to `/v1/import`. Turns Datadog / Arize /
+Langfuse / Mastra / OTel GenAI spans into ingest sources instead of
+competitors.
+
+Server-side dependency: etch commit `a8129e1` or later.
+
+### Added
+
+- `--import-format <otel-gen-ai | custom>` — format of the events
+  in the file. `otel-gen-ai` maps OTel GenAI semantic-convention
+  spans to `model_card_attestation` rows; `custom` is a generic
+  passthrough where the caller supplies
+  `{kind, payload, oss_event_id_ref}` per event.
+- `--import-file <path>` — accepts `.jsonl` / `.ndjson` (one JSON
+  object per line), `.json` array, or `.json` `{"events": [...]}`.
+  Max 500 events per file — split larger batches.
+- New module `etch_record.import_client` with `read_events_from_file`
+  and `import_events`.
+- New exit code `12` — bulk import failed (file parse error,
+  transport failure, or server 400/500).
+
+### Import-mode semantics
+
+When either `--import-format` or `--import-file` is set, etch-record
+switches to import mode:
+- The positional description arg is IGNORED.
+- Every Wave 1 sub-record flag is IGNORED.
+- No MCP `record_event` call is made.
+- The file's events go through the format adapter server-side and
+  land on the Etch chain as per-event rows.
+
+`--import-format` alone or `--import-file` alone is a usage error
+(exit 2), never a silent partial invocation.
+
+Output on success:
+
+```
+OK  imported=N  kinds={...}  seq_range=[first, last]
+```
+
+If any events were skipped by the adapter (unknown kind under
+`custom`, span without `gen_ai.request.model` under `otel-gen-ai`),
+the count is printed on stderr alongside the first skip's `{index,
+reason}` object.
+
+### Follow-ups
+
+`langsmith`, `cloudtrail`, and `vercel-ai` format adapters will
+extend the `--import-format` choice list; those are follow-up
+releases after v0.6.0. The `custom` escape hatch covers everything
+in the meantime.
+
 ## v0.5.0 — 2026-08-01
 
 Wave 1 #4-#7 in one release. Adds ten new CLI flags across four
