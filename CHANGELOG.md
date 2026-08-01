@@ -3,6 +3,17 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.2.1 — 2026-08-01
+
+Cosmetic patch. The `etch-record --version` string and the MCP
+`clientInfo.version` field in the initialize handshake now report the
+actual package version (previously frozen at `0.1.0` because
+`__version__` in `src/etch_record/__init__.py` was not bumped in
+v0.2.0).
+
+No behavior changes. Users on v0.2.0 who do not care about the version
+banner or the client-identity string do not need to upgrade.
+
 ## v0.2.0 — 2026-08-01
 
 Wave 1 #1 of the Etch parallel chain roadmap ships in this release. Adds

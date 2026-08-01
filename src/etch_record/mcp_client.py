@@ -24,6 +24,7 @@ from typing import Any
 
 import httpx
 
+from . import __version__
 from .config import Config
 
 
@@ -133,7 +134,7 @@ def _initialize(client: httpx.Client, cfg: Config) -> str:
         "params": {
             "protocolVersion": _PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "etch-record", "version": "0.1.0"},
+            "clientInfo": {"name": "etch-record", "version": __version__},
         },
     }
     r = client.post("/mcp", headers=_headers_for(cfg), json=payload)
