@@ -5,15 +5,20 @@ Covers:
 - attestation_client happy path + error paths (mocked httpx).
 - _assemble_attestation_from_flags: all-or-nothing validation, optional
   field passthrough, model_id required alongside model_card_hash.
+- CLI end-to-end: attestation-only invocation reaches the fourth call
+  even when governance and authority flags are absent.
 """
 
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import httpx
 import pytest
+from click.testing import CliRunner
 
+from etch_record import cli as etch_cli
 from etch_record.attestation_client import (
     AttestationError,
     AttestationResult,
@@ -201,3 +206,90 @@ def test_assemble_partial_flags_only_prompt_still_errors():
             attestation_policy_hash=None,
             model_id=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# CLI end-to-end — attestation reaches its endpoint independently
+# of governance / authority (regression: v0.4.0 short-circuited past
+# attestation when no authority flags were set)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_attestation_only_makes_second_call(monkeypatch):
+    """Only --model-card-hash + --model-id set (no governance, no
+    authority). CLI must still POST the attestation. This is the exact
+    regression from v0.4.0 — the authority block had `if authority_claim
+    is None: return` which skipped the attestation call downstream.
+    """
+    monkeypatch.setenv("ETCH_PROJECT_ID", "proj_alpha")
+    monkeypatch.setenv("ETCH_APP_TOKEN", "wm_test")
+    monkeypatch.setenv("ETCH_RATE_LIMIT_PER_MINUTE", "0")
+
+    fake_att_result = AttestationResult(
+        etch_chain_seq=7,
+        etch_row_id="row-uuid-att",
+        attestation_hash="sha256:" + "aa" * 32,
+        oss_event_id_ref="oss-attest-1",
+        recorded_at="2026-08-01T20:35:00.000Z",
+    )
+
+    with patch.object(etch_cli, "record_event",
+                      return_value={"result": {"content": [
+                          {"type": "text",
+                           "text": '{"event_id": "oss-attest-1"}'}]}}):
+        with patch.object(etch_cli, "record_model_card_attestation",
+                          return_value=fake_att_result) as att_mock:
+            runner = CliRunner()
+            result = runner.invoke(etch_cli.main, [
+                "hello",
+                "--model-card-hash", "sha256:" + "aa" * 32,
+                "--model-id", "claude-opus-4-7",
+            ])
+            assert result.exit_code == 0, result.output
+            assert "event_id=oss-attest-1" in result.output
+            assert "attestation_seq=7" in result.output
+            att_mock.assert_called_once()
+            call = att_mock.call_args
+            assert call.kwargs["oss_event_id"] == "oss-attest-1"
+            assert call.kwargs["attestation"]["model_id"] == "claude-opus-4-7"
+
+
+def test_cli_attestation_failure_exits_7(monkeypatch):
+    """Attestation call failing after base event succeeds → exit 7."""
+    monkeypatch.setenv("ETCH_PROJECT_ID", "proj_alpha")
+    monkeypatch.setenv("ETCH_APP_TOKEN", "wm_test")
+    monkeypatch.setenv("ETCH_RATE_LIMIT_PER_MINUTE", "0")
+
+    with patch.object(etch_cli, "record_event",
+                      return_value={"result": {"content": [
+                          {"type": "text",
+                           "text": '{"event_id": "oss-attest-2"}'}]}}):
+        with patch.object(etch_cli, "record_model_card_attestation",
+                          side_effect=AttestationError("mock: chain down")):
+            runner = CliRunner()
+            result = runner.invoke(etch_cli.main, [
+                "hello",
+                "--model-card-hash", "sha256:" + "aa" * 32,
+                "--model-id", "claude-opus-4-7",
+            ])
+            assert result.exit_code == 7
+            assert "event_id=oss-attest-2" in result.output
+
+
+def test_cli_no_attestation_flags_skips_the_fourth_call(monkeypatch):
+    """No attestation flags → the fourth call is not made. Existing
+    invocations without any Wave 1 #3 flag behave identically to
+    v0.3.0."""
+    monkeypatch.setenv("ETCH_PROJECT_ID", "proj_alpha")
+    monkeypatch.setenv("ETCH_APP_TOKEN", "wm_test")
+    monkeypatch.setenv("ETCH_RATE_LIMIT_PER_MINUTE", "0")
+
+    with patch.object(etch_cli, "record_event",
+                      return_value={"result": {"content": [
+                          {"type": "text", "text": '{"event_id": "oss-1"}'}]}}):
+        with patch.object(etch_cli,
+                          "record_model_card_attestation") as att_mock:
+            runner = CliRunner()
+            result = runner.invoke(etch_cli.main, ["hello"])
+            assert result.exit_code == 0, result.output
+            att_mock.assert_not_called()

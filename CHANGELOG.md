@@ -3,6 +3,27 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.4.1 — 2026-08-01
+
+Bug fix. v0.4.0 silently skipped the Wave 1 #3 attestation call
+whenever the Wave 1 #2 authority-receipt flags were absent. Root
+cause: the authority block had `if authority_claim is None: return`
+which short-circuited past every downstream sub-record call
+(including attestation) when no authority flags were set. Rewritten
+as an `if authority_claim is not None: ...` block so each layer is
+independent of every other.
+
+Callers using ANY combination of Wave 1 flags now work as
+documented, including attestation-only invocations. If you saw only
+`OK  event_id=...` without `OK  attestation_seq=...` on v0.4.0 with
+`--model-card-hash` set, this release fixes that. Base event was
+already recorded — the printed `event_id` is still valid for a
+manual retry.
+
+Adds three regression tests: attestation-only reaches the fourth
+call; attestation failure produces exit code 7; no-attestation-flags
+skips the fourth call entirely.
+
 ## v0.4.0 — 2026-08-01
 
 Wave 1 #3 of the Etch parallel chain roadmap. Adds four flags that

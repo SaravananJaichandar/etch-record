@@ -679,29 +679,26 @@ def main(
         authority_expires_at=authority_expires_at,
         receipt_type=receipt_type,
     )
-    if authority_claim is None:
-        return
-
-    signature_hex = sign_claim(priv, authority_claim)
-    try:
-        auth_result = record_authority_receipt(
-            cfg=cfg,
-            oss_event_id=event_id,
-            claim=authority_claim,
-            signature_hex=signature_hex,
-            pubkey_ref=pubkey_ref,
+    if authority_claim is not None:
+        signature_hex = sign_claim(priv, authority_claim)
+        try:
+            auth_result = record_authority_receipt(
+                cfg=cfg,
+                oss_event_id=event_id,
+                claim=authority_claim,
+                signature_hex=signature_hex,
+                pubkey_ref=pubkey_ref,
+            )
+        except AuthorityError as exc:
+            click.echo(f"etch-record: authority-receipt: {exc}", err=True)
+            # Base event (and governance, if requested) succeeded. Exit 6
+            # so shell callers can distinguish a receipt failure from a
+            # governance failure (exit 5) or an MCP-layer failure (exit 2).
+            sys.exit(6)
+        click.echo(
+            f"OK  authority_seq={auth_result.etch_chain_seq}  "
+            f"authority_hash={auth_result.authority_hash}",
         )
-    except AuthorityError as exc:
-        click.echo(f"etch-record: authority-receipt: {exc}", err=True)
-        # Base event (and governance, if requested) succeeded. Exit 6
-        # so shell callers can distinguish a receipt failure from a
-        # governance failure (exit 5) or an MCP-layer failure (exit 2).
-        sys.exit(6)
-
-    click.echo(
-        f"OK  authority_seq={auth_result.etch_chain_seq}  "
-        f"authority_hash={auth_result.authority_hash}",
-    )
 
     # Wave 1 #3 — if attestation flags are set, POST the model-card
     # attestation bundle to the Etch chain. Independent of the three
