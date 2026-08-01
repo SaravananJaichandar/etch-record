@@ -3,6 +3,72 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.4.0 — 2026-08-01
+
+Wave 1 #3 of the Etch parallel chain roadmap. Adds four flags that
+attach a signed bundle of model / system-prompt / policy content
+hashes to any event, cross-referencing the OSS event by its ID.
+Positioning: cryptographic specificity for "which AI made this
+decision" — observability tools show model versions in a span field;
+this attestation commits them to a signed chain that is externally
+anchored.
+
+Server-side dependency: the etch server MUST run commit `935cdc1` or
+later (adds POST /v1/etch-chain/model-card-attestation).
+
+### Added
+
+- `--model-card-hash <sha256:hex>` — SHA-256 of the model card
+  document governing this session. Triggers a fourth call to
+  `/v1/etch-chain/model-card-attestation`.
+- `--system-prompt-hash <sha256:hex>` — optional. SHA-256 of the
+  system prompt in force at session start.
+- `--attestation-policy-hash <sha256:hex>` — optional. SHA-256 of the
+  session-scoped policy (distinct from `--policy-hash` on Wave 1 #1
+  governance, which is per-event).
+- `--model-id <string>` — human-readable model label
+  ('claude-opus-4-7', 'gpt-4o-2024-05-13'). Required whenever
+  `--model-card-hash` is set. Not authoritative — the hash is — but
+  auditors want the label for triage.
+- New module `etch_record.attestation_client` with
+  `record_model_card_attestation`.
+- New exit code `7` — model-card attestation failed. Base event (and
+  governance / authority receipt, if requested) still succeeded.
+
+### The 1-2-3-4 call sequence
+
+etch-record now supports the full four-call sequence:
+
+1. `record_event` (MCP)      → OSS chain base event
+2. `record_governance`       → Wave 1 #1 (governance sub-record)
+3. `record_authority_receipt`→ Wave 1 #2 (Ed25519-signed receipt)
+4. `record_model_card_attestation` → Wave 1 #3 (session-scoped hashes)
+
+Any subset of the four is valid; each layer is independent. Exit
+codes: 5 = governance, 6 = authority, 7 = attestation.
+
+### Example
+
+```
+etch-record "KYC decision on customer XYZ" \
+  --tags kyc,fintech,decision \
+  --policy-hash sha256:9f8c... \
+  --authority-privkey-file ~/keys/compliance.pem \
+  --authority-id compliance-officer-2 \
+  --receipt-type hitl_approval \
+  --model-card-hash sha256:1a2b3c... \
+  --model-id claude-opus-4-7
+```
+
+Four OK lines expected:
+
+```
+OK  session=...  event_id=...
+OK  governance_seq=1  governance_hash=sha256:...
+OK  authority_seq=1   authority_hash=sha256:...
+OK  attestation_seq=1 attestation_hash=sha256:...
+```
+
 ## v0.3.0 — 2026-08-01
 
 Wave 1 #2 of the Etch parallel chain roadmap. Adds five flags that

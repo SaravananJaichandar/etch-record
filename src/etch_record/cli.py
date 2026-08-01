@@ -21,6 +21,10 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .attestation_client import (
+    AttestationError,
+    record_model_card_attestation,
+)
 from .authority_client import (
     AuthorityError,
     compute_key_ref,
@@ -461,6 +465,60 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "invoked. Required whenever --authority-privkey-file is set."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 1 #3 (2026-08-01) — model-card / system-card attestation.
+# When --model-card-hash + --model-id are set, the CLI adds a FOURTH
+# call attaching a signed bundle of session-scoped content hashes to
+# the Etch chain. Cryptographic specificity for "which AI made this
+# decision." Exit code 7 on failure (base + governance + authority
+# still succeeded).
+# ---------------------------------------------------------------------------
+@click.option(
+    "--model-card-hash",
+    "model_card_hash",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #3 attestation: SHA-256 hash of the model card document "
+        "governing this session. 'sha256:<64-hex>' shape. Triggers a "
+        "fourth call to /v1/etch-chain/model-card-attestation."
+    ),
+)
+@click.option(
+    "--system-prompt-hash",
+    "system_prompt_hash",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #3 attestation: SHA-256 hash of the system prompt in "
+        "force at session start. Optional — omit if the session has no "
+        "distinct system prompt beyond what the model card already "
+        "commits to."
+    ),
+)
+@click.option(
+    "--attestation-policy-hash",
+    "attestation_policy_hash",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #3 attestation: SHA-256 hash of the session-scoped "
+        "policy (distinct from the per-event --policy-hash on Wave 1 "
+        "#1 governance). Optional."
+    ),
+)
+@click.option(
+    "--model-id",
+    "model_id",
+    type=str,
+    default=None,
+    help=(
+        "Wave 1 #3 attestation: human-readable model label "
+        "('claude-opus-4-7', 'gpt-4o-2024-05-13'). Not authoritative — "
+        "the hash is — but auditors want the label for triage. Required "
+        "whenever --model-card-hash is set."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -488,6 +546,10 @@ def main(
     authority_scope: str,
     authority_expires_at: str | None,
     receipt_type: str | None,
+    model_card_hash: str | None,
+    system_prompt_hash: str | None,
+    attestation_policy_hash: str | None,
+    model_id: str | None,
 ) -> None:
     tags = _parse_tags(tags_raw)
     evidence = _load_evidence(evidence_json, evidence_file)
@@ -641,6 +703,36 @@ def main(
         f"authority_hash={auth_result.authority_hash}",
     )
 
+    # Wave 1 #3 — if attestation flags are set, POST the model-card
+    # attestation bundle to the Etch chain. Independent of the three
+    # earlier calls; can be attached without governance or authority.
+    attestation = _assemble_attestation_from_flags(
+        model_card_hash=model_card_hash,
+        system_prompt_hash=system_prompt_hash,
+        attestation_policy_hash=attestation_policy_hash,
+        model_id=model_id,
+    )
+    if attestation is None:
+        return
+
+    try:
+        att_result = record_model_card_attestation(
+            cfg=cfg,
+            oss_event_id=event_id,
+            attestation=attestation,
+        )
+    except AttestationError as exc:
+        click.echo(f"etch-record: model-card-attestation: {exc}", err=True)
+        # Everything upstream succeeded; only the attestation failed.
+        # Exit 7 lets shell callers distinguish this from the earlier
+        # sub-record failures (5 = governance, 6 = authority).
+        sys.exit(7)
+
+    click.echo(
+        f"OK  attestation_seq={att_result.etch_chain_seq}  "
+        f"attestation_hash={att_result.attestation_hash}",
+    )
+
 
 def _assemble_governance_from_flags(
     policy_hash: str | None,
@@ -732,6 +824,56 @@ def _parse_uncertainty_inline(raw: str) -> dict:
     if not basis:
         raise click.UsageError("--uncertainty basis must be non-empty.")
     return {"confidence": confidence, "basis": basis}
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 #3 attestation helpers
+# ---------------------------------------------------------------------------
+
+
+def _assemble_attestation_from_flags(
+    model_card_hash: str | None,
+    system_prompt_hash: str | None,
+    attestation_policy_hash: str | None,
+    model_id: str | None,
+) -> dict | None:
+    """Compose the model-card attestation object from CLI flags, or
+    return None if none of them are set (signals: skip the fourth API
+    call).
+
+    All-or-nothing on the required pair (model_card_hash + model_id):
+    a partial invocation is a usage error, not a silently-dropped
+    attestation.
+    """
+    provided = any((
+        model_card_hash, system_prompt_hash,
+        attestation_policy_hash, model_id,
+    ))
+    if not provided:
+        return None
+
+    missing = []
+    if model_card_hash is None:
+        missing.append("--model-card-hash")
+    if model_id is None:
+        missing.append("--model-id")
+    if missing:
+        raise click.UsageError(
+            "Wave 1 #3 attestation requires: "
+            + ", ".join(missing)
+            + " (any attestation flag triggers all-required validation)",
+        )
+
+    attestation: dict = {
+        "model_card_hash": model_card_hash,
+        "model_id": model_id,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if system_prompt_hash is not None:
+        attestation["system_prompt_hash"] = system_prompt_hash
+    if attestation_policy_hash is not None:
+        attestation["policy_hash"] = attestation_policy_hash
+    return attestation
 
 
 # ---------------------------------------------------------------------------
