@@ -3,6 +3,64 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.5.0 — 2026-08-01
+
+Wave 1 #4-#7 in one release. Adds ten new CLI flags across four
+independent Etch chain sub-records: session risk score, autonomy
+level, supersession DAG edge, and signed dissent. Every Wave 1
+endpoint is now callable from etch-record.
+
+Server-side dependency: etch commit `c355526` or later (adds all
+four endpoints in one commit).
+
+### The 1-to-8 call sequence
+
+etch-record now supports up to eight sequential calls per
+invocation. Each sub-record is triggered by its own flag set;
+every layer is independent:
+
+  1. record_event (MCP)              → OSS chain base event
+  2. record_governance               → Wave 1 #1
+  3. record_authority_receipt        → Wave 1 #2 (Ed25519)
+  4. record_model_card_attestation   → Wave 1 #3
+  5. record_session_risk_score       → Wave 1 #4
+  6. record_autonomy_level           → Wave 1 #5
+  7. record_supersession_edge        → Wave 1 #6
+  8. record_signed_dissent           → Wave 1 #7 (Ed25519, reuses
+                                                   #2 pubkey registry)
+
+Exit codes: 5 governance, 6 authority, 7 attestation, 8 risk,
+9 autonomy, 10 supersession, 11 dissent.
+
+### Added flags
+
+Wave 1 #4 session risk score:
+  --risk-score <0.0-1.0>  --risk-vendor <slug>  --risk-basis <text>
+
+Wave 1 #5 autonomy level:
+  --autonomy-level <L0-L3 | custom>  --autonomy-scheme <standard-L0-L3 | buyer-custom>  --autonomy-rationale <text>
+
+Wave 1 #6 supersession edge:
+  --supersedes <oss_event_id>  --supersession-intent <compat|breaking|deprecation|correction|refinement>
+  --supersession-depends-on <comma-separated>  --supersession-rationale <text>
+
+Wave 1 #7 signed dissent (reuses Wave 1 #2 pubkey registration):
+  --dissent-privkey-file <PEM>  --dissenter-id <string>  --dissent-rationale <text>
+
+### Fixed
+
+Wave 1 #3 attestation block used to `return` if no attestation flags
+were set, which short-circuited past every Wave 1 #4-#7 downstream
+layer. Rewritten as an independent `if attestation is not None: ...`
+block to match every other Wave 1 layer. Regression tests added for
+each of the four new items in the same "only THIS layer active"
+shape.
+
+### Deps
+
+No new dependencies. cryptography (Ed25519) already required since
+v0.3.0.
+
 ## v0.4.1 — 2026-08-01
 
 Bug fix. v0.4.0 silently skipped the Wave 1 #3 attestation call

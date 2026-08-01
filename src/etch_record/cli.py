@@ -38,9 +38,23 @@ from .config import ConfigError, load
 from .governance_client import GovernanceError, record_governance
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
+from .wave1_4567_clients import (
+    AutonomyError,
+    DissentError,
+    RiskScoreError,
+    SupersessionError,
+    record_autonomy_level,
+    record_session_risk_score,
+    record_signed_dissent,
+    record_supersession_edge,
+)
 
 
 _RECEIPT_TYPES = ("vested_authority", "hitl_approval", "automated_by_policy")
+_AUTONOMY_SCHEMES = ("standard-L0-L3", "buyer-custom")
+_SUPERSESSION_INTENTS = (
+    "compat", "breaking", "deprecation", "correction", "refinement",
+)
 
 
 _LARGE_ARG_THRESHOLD_CHARS = 4096
@@ -519,6 +533,114 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "whenever --model-card-hash is set."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 1 #4 (2026-08-01) — session risk score
+# ---------------------------------------------------------------------------
+@click.option(
+    "--risk-score",
+    "risk_score",
+    type=float,
+    default=None,
+    help=(
+        "Wave 1 #4 session risk score: bounded [0.0, 1.0]. Triggers "
+        "POST /v1/etch-chain/session-risk-score. Requires --risk-vendor "
+        "+ --risk-basis."
+    ),
+)
+@click.option(
+    "--risk-vendor", "risk_vendor", type=str, default=None,
+    help="Wave 1 #4: upstream vendor slug (e.g. 'assury-enforce').",
+)
+@click.option(
+    "--risk-basis", "risk_basis", type=str, default=None,
+    help=(
+        "Wave 1 #4: which rule/model/policy version produced the "
+        "score (e.g. 'policy_v3_rule_12_pii_regex')."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 1 #5 (2026-08-01) — autonomy level
+# ---------------------------------------------------------------------------
+@click.option(
+    "--autonomy-level", "autonomy_level", type=str, default=None,
+    help=(
+        "Wave 1 #5 autonomy level. Triggers POST "
+        "/v1/etch-chain/autonomy-level. Value must be in the L0-L3 set "
+        "unless --autonomy-scheme=buyer-custom."
+    ),
+)
+@click.option(
+    "--autonomy-scheme", "autonomy_scheme",
+    type=click.Choice(_AUTONOMY_SCHEMES),
+    default="standard-L0-L3",
+    help=(
+        "Wave 1 #5: 'standard-L0-L3' (default) or 'buyer-custom'. "
+        "Only meaningful when --autonomy-level is set."
+    ),
+)
+@click.option(
+    "--autonomy-rationale", "autonomy_rationale", type=str, default=None,
+    help="Wave 1 #5: optional free-text rationale for the autonomy level.",
+)
+# ---------------------------------------------------------------------------
+# Wave 1 #6 (2026-08-01) — supersession edge
+# ---------------------------------------------------------------------------
+@click.option(
+    "--supersedes", "supersedes_event_id", type=str, default=None,
+    help=(
+        "Wave 1 #6 supersession edge: OSS event ID that THIS event "
+        "supersedes. Triggers POST /v1/etch-chain/supersession-edge. "
+        "Requires --supersession-intent."
+    ),
+)
+@click.option(
+    "--supersession-intent", "supersession_intent",
+    type=click.Choice(_SUPERSESSION_INTENTS),
+    default=None,
+    help="Wave 1 #6: intent enum. Required whenever --supersedes is set.",
+)
+@click.option(
+    "--supersession-depends-on", "supersession_depends_on",
+    type=str, default="",
+    help=(
+        "Wave 1 #6: comma-separated OSS event IDs this event depends "
+        "on. Empty = no dependencies. The superseding event's own ID "
+        "is filtered out server-side."
+    ),
+)
+@click.option(
+    "--supersession-rationale", "supersession_rationale",
+    type=str, default=None,
+    help="Wave 1 #6: optional free-text rationale for the supersession.",
+)
+# ---------------------------------------------------------------------------
+# Wave 1 #7 (2026-08-01) — signed dissent
+# ---------------------------------------------------------------------------
+@click.option(
+    "--dissent-privkey-file", "dissent_privkey_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 1 #7 signed dissent: Ed25519 private key (PEM). Reuses "
+        "the Wave 1 #2 pubkey registry; register with `etch "
+        "add-authority-key` under the dissenter_id first. Triggers "
+        "POST /v1/etch-chain/signed-dissent."
+    ),
+)
+@click.option(
+    "--dissenter-id", "dissenter_id", type=str, default=None,
+    help=(
+        "Wave 1 #7: human-readable dissenter identity. Must match the "
+        "authority_id used when the pubkey was registered."
+    ),
+)
+@click.option(
+    "--dissent-rationale", "dissent_rationale", type=str, default=None,
+    help=(
+        "Wave 1 #7: rationale for the dissent (non-empty). Required "
+        "whenever --dissent-privkey-file is set."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -550,6 +672,19 @@ def main(
     system_prompt_hash: str | None,
     attestation_policy_hash: str | None,
     model_id: str | None,
+    risk_score: float | None,
+    risk_vendor: str | None,
+    risk_basis: str | None,
+    autonomy_level: str | None,
+    autonomy_scheme: str,
+    autonomy_rationale: str | None,
+    supersedes_event_id: str | None,
+    supersession_intent: str | None,
+    supersession_depends_on: str,
+    supersession_rationale: str | None,
+    dissent_privkey_file: Path | None,
+    dissenter_id: str | None,
+    dissent_rationale: str | None,
 ) -> None:
     tags = _parse_tags(tags_raw)
     evidence = _load_evidence(evidence_json, evidence_file)
@@ -709,26 +844,88 @@ def main(
         attestation_policy_hash=attestation_policy_hash,
         model_id=model_id,
     )
-    if attestation is None:
-        return
-
-    try:
-        att_result = record_model_card_attestation(
-            cfg=cfg,
-            oss_event_id=event_id,
-            attestation=attestation,
+    if attestation is not None:
+        try:
+            att_result = record_model_card_attestation(
+                cfg=cfg,
+                oss_event_id=event_id,
+                attestation=attestation,
+            )
+        except AttestationError as exc:
+            click.echo(f"etch-record: model-card-attestation: {exc}", err=True)
+            # Everything upstream succeeded; only the attestation failed.
+            # Exit 7 lets shell callers distinguish this from the earlier
+            # sub-record failures (5 = governance, 6 = authority).
+            sys.exit(7)
+        click.echo(
+            f"OK  attestation_seq={att_result.etch_chain_seq}  "
+            f"attestation_hash={att_result.attestation_hash}",
         )
-    except AttestationError as exc:
-        click.echo(f"etch-record: model-card-attestation: {exc}", err=True)
-        # Everything upstream succeeded; only the attestation failed.
-        # Exit 7 lets shell callers distinguish this from the earlier
-        # sub-record failures (5 = governance, 6 = authority).
-        sys.exit(7)
 
-    click.echo(
-        f"OK  attestation_seq={att_result.etch_chain_seq}  "
-        f"attestation_hash={att_result.attestation_hash}",
+    # Wave 1 #4 — session risk score
+    risk_payload = _prepare_risk_score(risk_score, risk_vendor, risk_basis)
+    if risk_payload is not None:
+        try:
+            r = record_session_risk_score(cfg, event_id, risk_payload)
+        except RiskScoreError as exc:
+            click.echo(f"etch-record: session-risk-score: {exc}", err=True)
+            sys.exit(8)
+        click.echo(
+            f"OK  risk_seq={r.etch_chain_seq}  risk_hash={r.risk_hash}",
+        )
+
+    # Wave 1 #5 — autonomy level
+    autonomy_payload = _prepare_autonomy_level(
+        autonomy_level, autonomy_scheme, autonomy_rationale,
     )
+    if autonomy_payload is not None:
+        try:
+            r = record_autonomy_level(cfg, event_id, autonomy_payload)
+        except AutonomyError as exc:
+            click.echo(f"etch-record: autonomy-level: {exc}", err=True)
+            sys.exit(9)
+        click.echo(
+            f"OK  autonomy_seq={r.etch_chain_seq}  "
+            f"autonomy_hash={r.autonomy_hash}",
+        )
+
+    # Wave 1 #6 — supersession edge
+    supersession_edge = _prepare_supersession_edge(
+        supersedes_event_id, supersession_intent,
+        supersession_depends_on, supersession_rationale,
+    )
+    if supersession_edge is not None:
+        try:
+            r = record_supersession_edge(cfg, event_id, supersession_edge)
+        except SupersessionError as exc:
+            click.echo(f"etch-record: supersession-edge: {exc}", err=True)
+            sys.exit(10)
+        click.echo(
+            f"OK  supersession_seq={r.etch_chain_seq}  "
+            f"edge_hash={r.edge_hash}",
+        )
+
+    # Wave 1 #7 — signed dissent
+    dissent_prepared = _prepare_signed_dissent(
+        dissent_privkey_file, dissenter_id, dissent_rationale,
+    )
+    if dissent_prepared is not None:
+        dissent_payload, dissent_priv, dissent_pubkey_ref = dissent_prepared
+        signature_hex = sign_claim(dissent_priv, dissent_payload)
+        try:
+            r = record_signed_dissent(
+                cfg=cfg, oss_event_id=event_id,
+                dissent=dissent_payload,
+                signature_hex=signature_hex,
+                pubkey_ref=dissent_pubkey_ref,
+            )
+        except DissentError as exc:
+            click.echo(f"etch-record: signed-dissent: {exc}", err=True)
+            sys.exit(11)
+        click.echo(
+            f"OK  dissent_seq={r.etch_chain_seq}  "
+            f"dissent_hash={r.dissent_hash}",
+        )
 
 
 def _assemble_governance_from_flags(
@@ -821,6 +1018,131 @@ def _parse_uncertainty_inline(raw: str) -> dict:
     if not basis:
         raise click.UsageError("--uncertainty basis must be non-empty.")
     return {"confidence": confidence, "basis": basis}
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 #4/#5/#6/#7 helpers
+# ---------------------------------------------------------------------------
+
+
+def _prepare_risk_score(
+    risk_score: float | None,
+    risk_vendor: str | None,
+    risk_basis: str | None,
+) -> dict | None:
+    provided = any((risk_score is not None, risk_vendor, risk_basis))
+    if not provided:
+        return None
+    missing = []
+    if risk_score is None:
+        missing.append("--risk-score")
+    if risk_vendor is None:
+        missing.append("--risk-vendor")
+    if risk_basis is None:
+        missing.append("--risk-basis")
+    if missing:
+        raise click.UsageError(
+            "Wave 1 #4 risk score requires: " + ", ".join(missing),
+        )
+    if not (0.0 <= risk_score <= 1.0):
+        raise click.UsageError(
+            "--risk-score must be in [0.0, 1.0]",
+        )
+    return {
+        "score": risk_score,
+        "vendor": risk_vendor,
+        "basis": risk_basis,
+        "attested_at": utc_iso_ms_now(),
+    }
+
+
+def _prepare_autonomy_level(
+    autonomy_level: str | None,
+    autonomy_scheme: str,
+    autonomy_rationale: str | None,
+) -> dict | None:
+    if autonomy_level is None:
+        return None
+    payload = {
+        "level": autonomy_level,
+        "level_scheme": autonomy_scheme,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if autonomy_rationale is not None:
+        payload["rationale"] = autonomy_rationale
+    return payload
+
+
+def _prepare_supersession_edge(
+    supersedes_event_id: str | None,
+    supersession_intent: str | None,
+    supersession_depends_on: str,
+    supersession_rationale: str | None,
+) -> dict | None:
+    provided = any((
+        supersedes_event_id, supersession_intent,
+        supersession_depends_on, supersession_rationale,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if supersedes_event_id is None:
+        missing.append("--supersedes")
+    if supersession_intent is None:
+        missing.append("--supersession-intent")
+    if missing:
+        raise click.UsageError(
+            "Wave 1 #6 supersession requires: " + ", ".join(missing),
+        )
+    depends = [
+        s.strip() for s in supersession_depends_on.split(",") if s.strip()
+    ] if supersession_depends_on else []
+    edge = {
+        "superseded_oss_event_id": supersedes_event_id,
+        "intent": supersession_intent,
+        "depends_on": depends,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if supersession_rationale is not None:
+        edge["rationale"] = supersession_rationale
+    return edge
+
+
+def _prepare_signed_dissent(
+    dissent_privkey_file: Path | None,
+    dissenter_id: str | None,
+    dissent_rationale: str | None,
+):
+    """Return (dissent_dict, priv, pubkey_ref) or None if no dissent
+    flags were set."""
+    provided = any((
+        dissent_privkey_file, dissenter_id, dissent_rationale,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if dissent_privkey_file is None:
+        missing.append("--dissent-privkey-file")
+    if dissenter_id is None:
+        missing.append("--dissenter-id")
+    if dissent_rationale is None:
+        missing.append("--dissent-rationale")
+    if missing:
+        raise click.UsageError(
+            "Wave 1 #7 signed dissent requires: " + ", ".join(missing),
+        )
+    try:
+        priv = load_ed25519_privkey(dissent_privkey_file)
+    except Exception as exc:  # noqa: BLE001
+        raise click.UsageError(str(exc)) from exc
+    pubkey_hex = derive_pubkey_hex(priv)
+    pubkey_ref = compute_key_ref(pubkey_hex)
+    dissent = {
+        "dissenter_id": dissenter_id,
+        "rationale": dissent_rationale,
+        "attested_at": utc_iso_ms_now(),
+    }
+    return dissent, priv, pubkey_ref
 
 
 # ---------------------------------------------------------------------------
