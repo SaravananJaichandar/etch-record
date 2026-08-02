@@ -45,6 +45,18 @@ from .stop_condition_client import (
     StopConditionError,
     record_stop_condition,
 )
+from .postmortem_client import (
+    PostmortemError,
+    record_postmortem,
+)
+from .hsm_attestation_client import (
+    HsmAttestationError,
+    record_hsm_attestation,
+)
+from .cross_chain_reference_client import (
+    CrossChainReferenceError,
+    record_cross_chain_reference,
+)
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
 from .wave1_4567_clients import (
@@ -736,6 +748,139 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "session-scoped vs global halts."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 5 #20 (2026-08-02) — signed postmortem
+# ---------------------------------------------------------------------------
+@click.option(
+    "--postmortem-about-event", "postmortem_about_event",
+    type=str, default=None,
+    help=(
+        "Wave 5 #20: OSS event id the postmortem is retroactively "
+        "about. Triggers POST /v1/etch-chain/postmortem. Requires "
+        "--postmortem-finding + --postmortem-corrective-action."
+    ),
+)
+@click.option(
+    "--postmortem-finding", "postmortem_finding",
+    type=str, default=None,
+    help=(
+        "Wave 5 #20: free-text finding text. Required whenever "
+        "--postmortem-about-event is set."
+    ),
+)
+@click.option(
+    "--postmortem-corrective-action", "postmortem_corrective_action",
+    type=str, default=None,
+    help=(
+        "Wave 5 #20: corrective-action text. Required whenever "
+        "--postmortem-about-event is set."
+    ),
+)
+@click.option(
+    "--postmortem-corrective-action-signed-by",
+    "postmortem_corrective_action_signed_by",
+    type=str, default=None,
+    help=(
+        "Wave 5 #20: optional signer id for the corrective action."
+    ),
+)
+@click.option(
+    "--postmortem-retro-confidence", "postmortem_retro_confidence",
+    type=float, default=None,
+    help=(
+        "Wave 5 #20: optional retroactive confidence downgrade "
+        "(0.0-1.0). When set, indicates the original event's "
+        "confidence was, in hindsight, too high."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 5 #17 (2026-08-02) — HSM / TPM / enclave attestation
+# ---------------------------------------------------------------------------
+@click.option(
+    "--hsm-vendor", "hsm_vendor",
+    type=str, default=None,
+    help=(
+        "Wave 5 #17: HSM/TPM vendor id (tpm2, yubikey, aws-nitro, "
+        "gcp-shielded, azure-attestation, sev-snp, intel-tdx). "
+        "Triggers POST /v1/etch-chain/hsm-attestation. Requires "
+        "--hsm-format + --hsm-blob-file."
+    ),
+)
+@click.option(
+    "--hsm-format", "hsm_format",
+    type=str, default=None,
+    help=(
+        "Wave 5 #17: attestation format id (tpm2-quote-v1, "
+        "yubico-attestation-cert, aws-nitro-cose-sign1, "
+        "gcp-shielded-vm-quote, azure-tdx-attestation, "
+        "sev-snp-report-v1, intel-tdx-quote-v4). Required "
+        "whenever --hsm-vendor is set."
+    ),
+)
+@click.option(
+    "--hsm-blob-file", "hsm_blob_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 5 #17: path to the raw attestation blob. Read as "
+        "bytes and base64-encoded client-side before POST. Required "
+        "whenever --hsm-vendor is set."
+    ),
+)
+@click.option(
+    "--hsm-key-ref", "hsm_key_ref",
+    type=str, default=None,
+    help=(
+        "Wave 5 #17: optional stable key reference (typically "
+        "sha256:... of the pubkey the HSM signed with)."
+    ),
+)
+@click.option(
+    "--hsm-serial", "hsm_serial",
+    type=str, default=None,
+    help=(
+        "Wave 5 #17: optional HSM/enclave serial for the pubkey ledger."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 5 #18 (2026-08-02) — cross-chain reference (federated evidence)
+# ---------------------------------------------------------------------------
+@click.option(
+    "--cross-chain-target-chain-id", "cross_chain_target_chain_id",
+    type=str, default=None,
+    help=(
+        "Wave 5 #18: sha256:... chain id of the OTHER chain being "
+        "referenced (produced by compute_chain_id). Triggers POST "
+        "/v1/etch-chain/cross-chain-reference. Requires --target-epoch "
+        "and --target-event-hash."
+    ),
+)
+@click.option(
+    "--cross-chain-target-epoch", "cross_chain_target_epoch",
+    type=int, default=None,
+    help=(
+        "Wave 5 #18: epoch_seq on the target chain that contains "
+        "the referenced event. Required whenever "
+        "--cross-chain-target-chain-id is set."
+    ),
+)
+@click.option(
+    "--cross-chain-target-event-hash", "cross_chain_target_event_hash",
+    type=str, default=None,
+    help=(
+        "Wave 5 #18: sha256:... row_hash of the specific event on "
+        "the target chain being referenced. Required whenever "
+        "--cross-chain-target-chain-id is set."
+    ),
+)
+@click.option(
+    "--cross-chain-label", "cross_chain_label",
+    type=str, default=None,
+    help=(
+        "Wave 5 #18: optional free-form label describing what the "
+        "referenced event is (e.g. 'supplier X kyc-approval')."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -788,6 +933,20 @@ def main(
     stop_condition_id: str | None,
     stop_condition_reason: str | None,
     stop_condition_scope: str | None,
+    postmortem_about_event: str | None,
+    postmortem_finding: str | None,
+    postmortem_corrective_action: str | None,
+    postmortem_corrective_action_signed_by: str | None,
+    postmortem_retro_confidence: float | None,
+    hsm_vendor: str | None,
+    hsm_format: str | None,
+    hsm_blob_file: Path | None,
+    hsm_key_ref: str | None,
+    hsm_serial: str | None,
+    cross_chain_target_chain_id: str | None,
+    cross_chain_target_epoch: int | None,
+    cross_chain_target_event_hash: str | None,
+    cross_chain_label: str | None,
 ) -> None:
     # Wave 2 #8 — bulk import mode. Runs the file through the format
     # adapter server-side; single-event flow is completely skipped
@@ -1058,6 +1217,181 @@ def main(
             f"OK  stop_condition_seq={r.etch_chain_seq}  "
             f"stop_condition_hash={r.stop_condition_hash}",
         )
+
+    # Wave 5 #20 — signed postmortem. Independent of every prior
+    # layer. Follows the "if X is not None: ..." pattern locked in
+    # memory after the v0.4.0 short-circuit incident.
+    postmortem_payload = _prepare_postmortem(
+        postmortem_about_event,
+        postmortem_finding,
+        postmortem_corrective_action,
+        postmortem_corrective_action_signed_by,
+        postmortem_retro_confidence,
+    )
+    if postmortem_payload is not None:
+        try:
+            r = record_postmortem(cfg, event_id, postmortem_payload)
+        except PostmortemError as exc:
+            click.echo(f"etch-record: postmortem: {exc}", err=True)
+            sys.exit(14)
+        click.echo(
+            f"OK  postmortem_seq={r.etch_chain_seq}  "
+            f"postmortem_hash={r.postmortem_hash}",
+        )
+
+    # Wave 5 #17 — HSM / TPM / enclave attestation. Independent.
+    hsm_payload = _prepare_hsm_attestation(
+        hsm_vendor, hsm_format, hsm_blob_file,
+        hsm_key_ref, hsm_serial,
+    )
+    if hsm_payload is not None:
+        try:
+            r = record_hsm_attestation(cfg, event_id, hsm_payload)
+        except HsmAttestationError as exc:
+            click.echo(
+                f"etch-record: hsm-attestation: {exc}", err=True,
+            )
+            sys.exit(16)
+        click.echo(
+            f"OK  hsm_attestation_seq={r.etch_chain_seq}  "
+            f"hsm_attestation_hash={r.hsm_attestation_hash}",
+        )
+
+    # Wave 5 #18 — cross-chain reference. Independent.
+    cross_ref_payload = _prepare_cross_chain_reference(
+        cross_chain_target_chain_id,
+        cross_chain_target_epoch,
+        cross_chain_target_event_hash,
+        cross_chain_label,
+    )
+    if cross_ref_payload is not None:
+        try:
+            r = record_cross_chain_reference(
+                cfg, event_id, cross_ref_payload,
+            )
+        except CrossChainReferenceError as exc:
+            click.echo(
+                f"etch-record: cross-chain-reference: {exc}",
+                err=True,
+            )
+            sys.exit(15)
+        click.echo(
+            f"OK  cross_chain_reference_seq={r.etch_chain_seq}  "
+            f"cross_ref_hash={r.cross_ref_hash}  "
+            f"target_chain_id={r.target_chain_id}",
+        )
+
+
+def _prepare_postmortem(
+    about_event: str | None,
+    finding: str | None,
+    corrective_action: str | None,
+    corrective_action_signed_by: str | None,
+    retro_confidence: float | None,
+) -> dict | None:
+    provided = any((
+        about_event, finding, corrective_action,
+        corrective_action_signed_by, retro_confidence is not None,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if about_event is None:
+        missing.append("--postmortem-about-event")
+    if finding is None:
+        missing.append("--postmortem-finding")
+    if corrective_action is None:
+        missing.append("--postmortem-corrective-action")
+    if missing:
+        raise click.UsageError(
+            "Wave 5 #20 postmortem requires: " + ", ".join(missing),
+        )
+    payload = {
+        "about_event_id": about_event,
+        "finding": finding,
+        "corrective_action": corrective_action,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if corrective_action_signed_by is not None:
+        payload["corrective_action_signed_by"] = (
+            corrective_action_signed_by
+        )
+    if retro_confidence is not None:
+        payload["retroactive_confidence_downgrade"] = retro_confidence
+    return payload
+
+
+def _prepare_hsm_attestation(
+    vendor: str | None,
+    fmt: str | None,
+    blob_file: Path | None,
+    key_ref: str | None,
+    serial: str | None,
+) -> dict | None:
+    import base64
+    provided = any((vendor, fmt, blob_file, key_ref, serial))
+    if not provided:
+        return None
+    missing = []
+    if vendor is None:
+        missing.append("--hsm-vendor")
+    if fmt is None:
+        missing.append("--hsm-format")
+    if blob_file is None:
+        missing.append("--hsm-blob-file")
+    if missing:
+        raise click.UsageError(
+            "Wave 5 #17 hsm-attestation requires: "
+            + ", ".join(missing),
+        )
+    with open(blob_file, "rb") as fh:
+        blob_bytes = fh.read()
+    payload = {
+        "vendor": vendor,
+        "attestation_format": fmt,
+        "attestation_blob_b64": base64.b64encode(blob_bytes).decode(),
+        "attested_at": utc_iso_ms_now(),
+    }
+    if key_ref is not None:
+        payload["key_ref"] = key_ref
+    if serial is not None:
+        payload["hsm_serial"] = serial
+    return payload
+
+
+def _prepare_cross_chain_reference(
+    target_chain_id: str | None,
+    target_epoch: int | None,
+    target_event_hash: str | None,
+    label: str | None,
+) -> dict | None:
+    provided = any((
+        target_chain_id, target_epoch is not None,
+        target_event_hash, label,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if target_chain_id is None:
+        missing.append("--cross-chain-target-chain-id")
+    if target_epoch is None:
+        missing.append("--cross-chain-target-epoch")
+    if target_event_hash is None:
+        missing.append("--cross-chain-target-event-hash")
+    if missing:
+        raise click.UsageError(
+            "Wave 5 #18 cross-chain-reference requires: "
+            + ", ".join(missing),
+        )
+    payload = {
+        "chain_id": target_chain_id,
+        "epoch_seq": target_epoch,
+        "event_hash": target_event_hash,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if label is not None:
+        payload["label"] = label
+    return payload
 
 
 def _prepare_stop_condition(

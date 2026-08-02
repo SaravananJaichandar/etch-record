@@ -3,6 +3,58 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.9.0 - 2026-08-02
+
+Wave 5 batch: signed postmortem (#20), HSM/TPM/enclave attestation
+(#17), and cross-chain reference (#18). Three new sub-record layers
+in one release. All three follow the "if X is not None: ..." block
+pattern so they compose independently with any prior Wave layer in
+a single etch-record invocation.
+
+Server-side dependency: etch commits shipping the three new
+endpoints (`POST /v1/etch-chain/postmortem`,
+`/hsm-attestation`, `/cross-chain-reference`).
+
+### Added
+
+Wave 5 #20 postmortem:
+
+- `--postmortem-about-event <oss-event-id>` - retroactive
+  postmortem target. Triggers POST /v1/etch-chain/postmortem.
+- `--postmortem-finding <text>` - required with the above.
+- `--postmortem-corrective-action <text>` - required with the above.
+- `--postmortem-corrective-action-signed-by <id>` - optional signer id.
+- `--postmortem-retro-confidence <0.0-1.0>` - optional retroactive
+  confidence downgrade.
+
+Wave 5 #17 HSM/TPM/enclave attestation:
+
+- `--hsm-vendor <id>` - tpm2, yubikey, aws-nitro, gcp-shielded,
+  azure-attestation, sev-snp, intel-tdx. Triggers POST
+  /v1/etch-chain/hsm-attestation.
+- `--hsm-format <id>` - vendor-specific format id (tpm2-quote-v1,
+  yubico-attestation-cert, aws-nitro-cose-sign1, and others).
+- `--hsm-blob-file <path>` - raw attestation blob, read as bytes and
+  base64-encoded client-side. Required with --hsm-vendor.
+- `--hsm-key-ref <ref>` - optional stable pubkey reference.
+- `--hsm-serial <serial>` - optional HSM/enclave serial.
+
+Wave 5 #18 cross-chain reference (Etch-to-Etch federation):
+
+- `--cross-chain-target-chain-id <sha256:...>` - derived chain id of
+  the target chain (compute_chain_id). Triggers POST
+  /v1/etch-chain/cross-chain-reference.
+- `--cross-chain-target-epoch <int>` - epoch_seq on target chain.
+- `--cross-chain-target-event-hash <sha256:...>` - row_hash of the
+  referenced target event.
+- `--cross-chain-label <text>` - optional free-form label.
+
+### Exit codes added
+
+- `14` postmortem sub-record failed
+- `15` cross-chain-reference sub-record failed
+- `16` hsm-attestation sub-record failed
+
 ## v0.8.0 — 2026-08-02
 
 Wave 4 #15 8-category drift engine. Extends the governance object

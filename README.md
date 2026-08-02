@@ -4,7 +4,7 @@ Small CLI helper. Signs any event into your Etch audit chain from the command li
 
 Built for the marketing-agent workflow: every research call, draft generation, review decision, and outreach send emits a signed event. Also usable standalone for any local activity you want notarized.
 
-**Latest: v0.2.0** — Wave 1 #1 governance flags (`--policy-hash`, `--authority-file`, `--assumptions-file`, `--uncertainty`, `--uncertainty-file`, `--invalidation-file`) attach a signed governance sub-record on the Etch parallel chain. See [CHANGELOG.md](CHANGELOG.md).
+**Latest: v0.9.0** — Wave 5 batch. Three new sub-record layers land in one release: signed postmortem (`--postmortem-about-event` + `--postmortem-finding` + `--postmortem-corrective-action`), HSM/TPM/enclave attestation (`--hsm-vendor` + `--hsm-format` + `--hsm-blob-file`), and cross-chain reference (`--cross-chain-target-chain-id` + `--cross-chain-target-epoch` + `--cross-chain-target-event-hash`). Twelve endpoints total now available on your Etch chain. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -133,3 +133,7 @@ The base event was recorded via the OSS chain; the governance sub-record was sig
 - `3` unexpected exception
 - `4` rate limit (client-side sliding window)
 - `5` governance sub-record failed — the base event was recorded successfully; use the printed `event_id` to retry the governance call
+- `13` stop-condition sub-record failed
+- `14` postmortem sub-record failed
+- `15` cross-chain-reference sub-record failed
+- `16` hsm-attestation sub-record failed
