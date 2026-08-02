@@ -3,6 +3,39 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.10.0 - 2026-08-02
+
+Wave 5 COMPLETE. Adds the chain-of-custody export bundle client
+(Wave 5 #19). Wave 5 now ships #17 + #18 + #19 + #20 across two
+etch-record releases (0.9.x + 0.10.0).
+
+Server-side dependency: etch commit shipping POST
+/v1/etch-chain/custody-export.
+
+### Added
+
+Wave 5 #19 chain-of-custody export bundle:
+
+- `--custody-export-session <sid>` - OSS session_id to bundle.
+  Triggers POST /v1/etch-chain/custody-export. Requires
+  --custody-export-declaration-regime.
+- `--custody-export-declaration-regime <regime>` - one of
+  fre_902_11 / fre_902_13 / fre_902_14 / eidas_qualified.
+- `--custody-export-out <path>` - optional path to write the full
+  self-authenticating JSON bundle. When omitted, only the marker
+  seq + bundle hash echo to stdout.
+
+The bundle contains: OSS chain rows + Etch chain rows scoped to the
+session, containing epochs with Merkle roots + hybrid signatures,
+external anchors (Rekor + OTS), regime-specific declaration text,
+and auditor verification instructions. Bundle is chain-signed via a
+custody_export_marker appended to the Etch chain with the bundle's
+SHA-256.
+
+### Exit codes added
+
+- `17` custody-export sub-record failed
+
 ## v0.9.1 - 2026-08-02
 
 Bugfix over v0.9.0. Two postmortem CLI shape mismatches found in

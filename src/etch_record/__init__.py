@@ -1,3 +1,3 @@
 """etch-record: CLI helper for signing arbitrary events into your Etch chain."""
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
