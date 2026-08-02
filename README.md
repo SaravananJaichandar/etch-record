@@ -4,7 +4,7 @@ Small CLI helper. Signs any event into your Etch audit chain from the command li
 
 Built for the marketing-agent workflow: every research call, draft generation, review decision, and outreach send emits a signed event. Also usable standalone for any local activity you want notarized.
 
-**Latest: v0.9.0** — Wave 5 batch. Three new sub-record layers land in one release: signed postmortem (`--postmortem-about-event` + `--postmortem-finding` + `--postmortem-corrective-action`), HSM/TPM/enclave attestation (`--hsm-vendor` + `--hsm-format` + `--hsm-blob-file`), and cross-chain reference (`--cross-chain-target-chain-id` + `--cross-chain-target-epoch` + `--cross-chain-target-event-hash`). Twelve endpoints total now available on your Etch chain. See [CHANGELOG.md](CHANGELOG.md).
+**Latest: v0.9.1** — Wave 5 batch. Three new sub-record layers land in one release: signed postmortem (`--postmortem-about-event` + `--postmortem-finding` + `--postmortem-corrective-action` + `--postmortem-corrective-action-signed-by`), HSM/TPM/enclave attestation (`--hsm-vendor` + `--hsm-format` + `--hsm-blob-file`), and cross-chain reference (`--cross-chain-target-chain-id` + `--cross-chain-target-epoch` + `--cross-chain-target-event-hash`). Twelve endpoints total now available on your Etch chain. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 

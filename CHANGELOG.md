@@ -3,6 +3,24 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.9.1 - 2026-08-02
+
+Bugfix over v0.9.0. Two postmortem CLI shape mismatches found in
+live e2e against the server contract:
+
+1. `--postmortem-corrective-action-signed-by` was documented as
+   optional but the server treats it as required. Now enforced
+   client-side whenever any postmortem flag is passed.
+2. The retroactive confidence downgrade takes a trio
+   (original + revised + basis), not a flat float.
+   `--postmortem-retro-confidence` removed and replaced by three
+   flags: `--postmortem-original-confidence`,
+   `--postmortem-revised-confidence`,
+   `--postmortem-downgrade-basis`. All three required together, or
+   none.
+
+No other feature changes. #17 and #18 unchanged from v0.9.0.
+
 ## v0.9.0 - 2026-08-02
 
 Wave 5 batch: signed postmortem (#20), HSM/TPM/enclave attestation

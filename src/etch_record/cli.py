@@ -781,16 +781,41 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
     "postmortem_corrective_action_signed_by",
     type=str, default=None,
     help=(
-        "Wave 5 #20: optional signer id for the corrective action."
+        "Wave 5 #20: signer id for the corrective action. Required "
+        "whenever --postmortem-about-event is set."
     ),
 )
 @click.option(
-    "--postmortem-retro-confidence", "postmortem_retro_confidence",
+    "--postmortem-original-confidence",
+    "postmortem_original_confidence",
     type=float, default=None,
     help=(
-        "Wave 5 #20: optional retroactive confidence downgrade "
-        "(0.0-1.0). When set, indicates the original event's "
-        "confidence was, in hindsight, too high."
+        "Wave 5 #20: optional retroactive-confidence-downgrade "
+        "component. The confidence value that WAS on the chain at "
+        "the original event's write time. Required together with "
+        "--postmortem-revised-confidence and "
+        "--postmortem-downgrade-basis."
+    ),
+)
+@click.option(
+    "--postmortem-revised-confidence",
+    "postmortem_revised_confidence",
+    type=float, default=None,
+    help=(
+        "Wave 5 #20: the confidence value the postmortem concludes "
+        "should have been used. Required together with "
+        "--postmortem-original-confidence and "
+        "--postmortem-downgrade-basis."
+    ),
+)
+@click.option(
+    "--postmortem-downgrade-basis",
+    "postmortem_downgrade_basis",
+    type=str, default=None,
+    help=(
+        "Wave 5 #20: free-text basis for the confidence revision "
+        "(e.g. 'post-hoc: false-positive rate 8% not 0.5%'). "
+        "Required together with the two confidence values."
     ),
 )
 # ---------------------------------------------------------------------------
@@ -937,7 +962,9 @@ def main(
     postmortem_finding: str | None,
     postmortem_corrective_action: str | None,
     postmortem_corrective_action_signed_by: str | None,
-    postmortem_retro_confidence: float | None,
+    postmortem_original_confidence: float | None,
+    postmortem_revised_confidence: float | None,
+    postmortem_downgrade_basis: str | None,
     hsm_vendor: str | None,
     hsm_format: str | None,
     hsm_blob_file: Path | None,
@@ -1226,7 +1253,9 @@ def main(
         postmortem_finding,
         postmortem_corrective_action,
         postmortem_corrective_action_signed_by,
-        postmortem_retro_confidence,
+        postmortem_original_confidence,
+        postmortem_revised_confidence,
+        postmortem_downgrade_basis,
     )
     if postmortem_payload is not None:
         try:
@@ -1287,11 +1316,18 @@ def _prepare_postmortem(
     finding: str | None,
     corrective_action: str | None,
     corrective_action_signed_by: str | None,
-    retro_confidence: float | None,
+    original_confidence: float | None,
+    revised_confidence: float | None,
+    downgrade_basis: str | None,
 ) -> dict | None:
+    confidence_provided = any((
+        original_confidence is not None,
+        revised_confidence is not None,
+        downgrade_basis is not None,
+    ))
     provided = any((
         about_event, finding, corrective_action,
-        corrective_action_signed_by, retro_confidence is not None,
+        corrective_action_signed_by, confidence_provided,
     ))
     if not provided:
         return None
@@ -1302,22 +1338,42 @@ def _prepare_postmortem(
         missing.append("--postmortem-finding")
     if corrective_action is None:
         missing.append("--postmortem-corrective-action")
+    if corrective_action_signed_by is None:
+        missing.append("--postmortem-corrective-action-signed-by")
     if missing:
         raise click.UsageError(
             "Wave 5 #20 postmortem requires: " + ", ".join(missing),
         )
+    if confidence_provided:
+        confidence_missing = []
+        if original_confidence is None:
+            confidence_missing.append(
+                "--postmortem-original-confidence")
+        if revised_confidence is None:
+            confidence_missing.append(
+                "--postmortem-revised-confidence")
+        if downgrade_basis is None:
+            confidence_missing.append(
+                "--postmortem-downgrade-basis")
+        if confidence_missing:
+            raise click.UsageError(
+                "Wave 5 #20 retroactive confidence downgrade "
+                "requires all three: "
+                + ", ".join(confidence_missing),
+            )
     payload = {
         "about_event_id": about_event,
         "finding": finding,
         "corrective_action": corrective_action,
+        "corrective_action_signed_by": corrective_action_signed_by,
         "attested_at": utc_iso_ms_now(),
     }
-    if corrective_action_signed_by is not None:
-        payload["corrective_action_signed_by"] = (
-            corrective_action_signed_by
-        )
-    if retro_confidence is not None:
-        payload["retroactive_confidence_downgrade"] = retro_confidence
+    if confidence_provided:
+        payload["retroactive_confidence_downgrade"] = {
+            "original_confidence": original_confidence,
+            "revised_confidence": revised_confidence,
+            "basis": downgrade_basis,
+        }
     return payload
 
 
