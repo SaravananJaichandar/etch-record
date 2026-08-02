@@ -3,6 +3,33 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.7.0 — 2026-08-02
+
+Wave 2 #10. Adds three flags for recording an explicit halt event
+on the Etch chain. AI kill-switch compliance for regulated
+deployments — SR 11-7, EU AI Act Art 14, SS3/18.
+
+Server-side dependency: etch commit that includes
+`/v1/etch-chain/stop-condition` (this release cycle's server change).
+
+### Added
+
+- `--stop-condition-id <label>` — human-readable halt label.
+- `--stop-condition-reason <text>` — free-text explanation.
+- `--stop-condition-scope <session_id>` — optional session_id
+  to constrain the halt. Omit for a project-wide halt.
+- New module `etch_record.stop_condition_client` with
+  `record_stop_condition`.
+- New exit code `13` — stop-condition failed.
+
+### Halt-violation detection
+
+The offline verifier (`etch-chain-verify` in the etch package) now
+walks stop_condition rows and flags any OSS events with timestamp >
+halt.ts as violations. First-ship intentionally strict — no
+deactivation semantics yet (that's Wave 5+). Regulators prefer
+over-flagging to under-flagging.
+
 ## v0.6.0 — 2026-08-02
 
 Wave 2 #8. Adds bulk import mode. `etch-record --import-format

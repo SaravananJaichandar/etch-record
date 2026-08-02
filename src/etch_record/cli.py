@@ -41,6 +41,10 @@ from .import_client import (
     import_events,
     read_events_from_file,
 )
+from .stop_condition_client import (
+    StopConditionError,
+    record_stop_condition,
+)
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
 from .wave1_4567_clients import (
@@ -651,7 +655,9 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
 # ---------------------------------------------------------------------------
 @click.option(
     "--import-format", "import_format",
-    type=click.Choice(("otel-gen-ai", "custom")),
+    type=click.Choice((
+        "otel-gen-ai", "langsmith", "cloudtrail", "vercel-ai", "custom",
+    )),
     default=None,
     help=(
         "Wave 2 #8 ingest-adapter: format of the events in the file "
@@ -668,6 +674,33 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "Wave 2 #8: path to a file containing events. Accepts .jsonl "
         "(one JSON object per line), .json array, or .json object "
         "with an 'events' key. Max 500 events per file."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 2 #10 (2026-08-02) — explicit stop conditions
+# ---------------------------------------------------------------------------
+@click.option(
+    "--stop-condition-id", "stop_condition_id", type=str, default=None,
+    help=(
+        "Wave 2 #10: human-readable halt label. Triggers POST "
+        "/v1/etch-chain/stop-condition. Requires --stop-condition-reason."
+    ),
+)
+@click.option(
+    "--stop-condition-reason", "stop_condition_reason",
+    type=str, default=None,
+    help=(
+        "Wave 2 #10: free-text explanation. Required whenever "
+        "--stop-condition-id is set."
+    ),
+)
+@click.option(
+    "--stop-condition-scope", "stop_condition_scope",
+    type=str, default=None,
+    help=(
+        "Wave 2 #10: optional session_id to constrain the halt. Omit "
+        "for a project-wide halt. Used by the verifier to distinguish "
+        "session-scoped vs global halts."
     ),
 )
 @click.version_option(__version__, prog_name="etch-record")
@@ -716,6 +749,9 @@ def main(
     dissent_rationale: str | None,
     import_format: str | None,
     import_file: Path | None,
+    stop_condition_id: str | None,
+    stop_condition_reason: str | None,
+    stop_condition_scope: str | None,
 ) -> None:
     # Wave 2 #8 — bulk import mode. Runs the file through the format
     # adapter server-side; single-event flow is completely skipped
@@ -964,6 +1000,57 @@ def main(
             f"OK  dissent_seq={r.etch_chain_seq}  "
             f"dissent_hash={r.dissent_hash}",
         )
+
+    # Wave 2 #10 — stop condition. Independent of every prior layer.
+    # Follows the same "if X is not None: ..." pattern locked in
+    # memory after the v0.4.0 short-circuit incident.
+    stop_condition_payload = _prepare_stop_condition(
+        stop_condition_id, stop_condition_reason, stop_condition_scope,
+    )
+    if stop_condition_payload is not None:
+        try:
+            r = record_stop_condition(
+                cfg, event_id, stop_condition_payload,
+            )
+        except StopConditionError as exc:
+            click.echo(f"etch-record: stop-condition: {exc}", err=True)
+            sys.exit(13)
+        click.echo(
+            f"OK  stop_condition_seq={r.etch_chain_seq}  "
+            f"stop_condition_hash={r.stop_condition_hash}",
+        )
+
+
+def _prepare_stop_condition(
+    stop_condition_id: str | None,
+    stop_condition_reason: str | None,
+    stop_condition_scope: str | None,
+) -> dict | None:
+    """Wave 2 #10: assemble the stop-condition payload if the flags
+    are set, else return None. --stop-condition-id and
+    --stop-condition-reason are required together; --scope is
+    optional."""
+    provided = any((stop_condition_id, stop_condition_reason,
+                    stop_condition_scope))
+    if not provided:
+        return None
+    missing = []
+    if stop_condition_id is None:
+        missing.append("--stop-condition-id")
+    if stop_condition_reason is None:
+        missing.append("--stop-condition-reason")
+    if missing:
+        raise click.UsageError(
+            "Wave 2 #10 stop condition requires: " + ", ".join(missing),
+        )
+    payload = {
+        "condition_id": stop_condition_id,
+        "halt_reason": stop_condition_reason,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if stop_condition_scope is not None:
+        payload["session_scope"] = stop_condition_scope
+    return payload
 
 
 def _assemble_governance_from_flags(
