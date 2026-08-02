@@ -3,6 +3,38 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.8.0 — 2026-08-02
+
+Wave 4 #15 8-category drift engine. Extends the governance object
+with 3 new optional fields (mission / terminology / context) so the
+server can populate an 8-dimension projection index. Drift detection
+runs offline via `etch-chain-verify` (added server-side).
+
+Server-side dependency: etch commit adding the multi-dim projection
+(this release cycle's server change).
+
+### Added
+
+- `--mission <string>` — mission statement (e.g. "customer KYC
+  compliance decisions"). Hashed server-side.
+- `--terminology <t1,t2,...>` — comma-separated key terms. Set-hashed
+  server-side.
+- `--context-file <path>` — JSON object describing operating context.
+  Any shape accepted; canonical-json-hashed server-side.
+
+Any of the new flags (alone or with legacy governance flags) triggers
+the governance sub-record call and populates the multi-dim index.
+
+### Positioning
+
+Wave 4 #15 is the largest single feature in the boundary plan (10
+dev-days). Ships the full OHRP v2.0 8-category surface:
+mission / assumption / confidence / evidence / scope / terminology /
+authority / context. No observability vendor claims this surface.
+
+Content angle for marketing: "8 drift dimensions with independent
+comparators, per-decision on-chain evidence, offline verifier."
+
 ## v0.7.0 — 2026-08-02
 
 Wave 2 #10. Adds three flags for recording an explicit halt event

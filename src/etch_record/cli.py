@@ -424,6 +424,39 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
     ),
 )
 # ---------------------------------------------------------------------------
+# Wave 4 #15 (2026-08-02) — 8-category governance schema extension.
+# Adds mission / terminology / context fields. Extraction is server-
+# side; drift detection runs via etch-chain-verify's dimensional
+# check. Any of these flags being set (alone or with the legacy
+# governance fields) triggers the second call and populates the
+# multi-dim projection index.
+# ---------------------------------------------------------------------------
+@click.option(
+    "--mission", "mission", type=str, default=None,
+    help=(
+        "Wave 4 #15 governance: mission statement string (e.g. "
+        "'customer KYC compliance decisions'). Hashed server-side "
+        "for drift detection."
+    ),
+)
+@click.option(
+    "--terminology", "terminology_raw", type=str, default=None,
+    help=(
+        "Wave 4 #15 governance: comma-separated key terms (e.g. "
+        "'KYC,PII,customer identity'). Set-hashed server-side."
+    ),
+)
+@click.option(
+    "--context-file", "context_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 4 #15 governance: JSON object describing the operating "
+        "context (e.g. {model, prompt_hash, policy_context}). Any "
+        "shape accepted; canonical-json-hashed server-side."
+    ),
+)
+# ---------------------------------------------------------------------------
 # Wave 1 #2 (2026-08-01) — bounded authority receipts.
 # When --authority-privkey-file + --authority-id + --receipt-type are all
 # set, the CLI adds a THIRD call:
@@ -725,6 +758,9 @@ def main(
     uncertainty: str | None,
     uncertainty_file: Path | None,
     invalidation_file: Path | None,
+    mission: str | None,
+    terminology_raw: str | None,
+    context_file: Path | None,
     authority_privkey_file: Path | None,
     authority_id: str | None,
     authority_scope: str,
@@ -860,6 +896,9 @@ def main(
         uncertainty=uncertainty,
         uncertainty_file=uncertainty_file,
         invalidation_file=invalidation_file,
+        mission=mission,
+        terminology_raw=terminology_raw,
+        context_file=context_file,
     )
     if governance is not None:
         try:
@@ -1060,12 +1099,20 @@ def _assemble_governance_from_flags(
     uncertainty: str | None,
     uncertainty_file: Path | None,
     invalidation_file: Path | None,
+    mission: str | None = None,
+    terminology_raw: str | None = None,
+    context_file: Path | None = None,
 ) -> dict | None:
     """Compose the governance object from CLI flags, or return None if
-    none of them are set (signals: skip the second API call)."""
+    none of them are set (signals: skip the second API call).
+
+    Wave 4 #15 additions: `mission` string, `terminology` list,
+    `context` dict. Any of these plus the legacy 5 fields triggers
+    the second call."""
     if not any((
         policy_hash, authority_file, assumptions_file,
         uncertainty, uncertainty_file, invalidation_file,
+        mission, terminology_raw, context_file,
     )):
         return None
 
@@ -1094,6 +1141,14 @@ def _assemble_governance_from_flags(
         gov["invalidation_conditions"] = _read_json_list(
             invalidation_file, "--invalidation-file",
         )
+    if mission:
+        gov["mission"] = mission
+    if terminology_raw:
+        gov["terminology"] = [
+            t.strip() for t in terminology_raw.split(",") if t.strip()
+        ]
+    if context_file is not None:
+        gov["context"] = _read_json_object(context_file, "--context-file")
     return gov
 
 
