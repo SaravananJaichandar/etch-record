@@ -4,7 +4,7 @@ Small CLI helper. Signs any event into your Etch audit chain from the command li
 
 Built for the marketing-agent workflow: every research call, draft generation, review decision, and outreach send emits a signed event. Also usable standalone for any local activity you want notarized.
 
-**Latest: v0.10.0** — Wave 5 COMPLETE. Adds chain-of-custody export bundle (`--custody-export-session` + `--custody-export-declaration-regime`) with four regimes: FRE 902(11), 902(13), 902(14), and eIDAS qualified. Thirteen endpoints total now available on your Etch chain across Waves 1-5. See [CHANGELOG.md](CHANGELOG.md).
+**Latest: v0.11.0** — Wave 6 COMPLETE. MASTER PLAN 23 OF 23 SHIPPED (100%). Adds artifact-hash (`--artifact <path>` for chain-signing the SHA-256 of any file), idempotency-collapse (`--idempotency-principal` + `--idempotency-scope` + `--idempotency-tool-version` + `--idempotency-argument-hash` for retry-storm dedup), and learning-persistence (`--learning-from-event` + `--learning-content-hash` + `--learning-propagation` for cross-session signed knowledge updates). Sixteen endpoints total now available on your Etch chain across Waves 1-6. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -138,3 +138,6 @@ The base event was recorded via the OSS chain; the governance sub-record was sig
 - `15` cross-chain-reference sub-record failed
 - `16` hsm-attestation sub-record failed
 - `17` custody-export sub-record failed
+- `18` artifact-hash sub-record failed
+- `19` idempotency-collapse sub-record failed
+- `20` learning-persistence sub-record failed

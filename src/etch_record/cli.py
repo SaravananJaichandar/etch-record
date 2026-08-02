@@ -61,6 +61,18 @@ from .custody_export_client import (
     CustodyExportError,
     record_custody_export,
 )
+from .artifact_hash_client import (
+    ArtifactHashError,
+    record_artifact_hash,
+)
+from .idempotency_collapse_client import (
+    IdempotencyCollapseError,
+    record_idempotency_collapse,
+)
+from .learning_persistence_client import (
+    LearningPersistenceError,
+    record_learning_persistence,
+)
 from .mcp_client import McpError, extract_event_id, record_event
 from .rate_limit import check_and_record
 from .wave1_4567_clients import (
@@ -949,6 +961,120 @@ def _maybe_warn_large_arg(name: str, value: str) -> None:
         "the marker)."
     ),
 )
+# ---------------------------------------------------------------------------
+# Wave 6 #21 (2026-08-02) - artifact-hash
+# ---------------------------------------------------------------------------
+@click.option(
+    "--artifact", "artifact_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Wave 6 #21: path to a file. Client computes the SHA-256 "
+        "locally (raw bytes never leave the machine) and sends only "
+        "the digest via POST /v1/etch-chain/artifact-hash. Optional "
+        "companions: --artifact-content-type, --artifact-filename."
+    ),
+)
+@click.option(
+    "--artifact-content-type", "artifact_content_type",
+    type=str, default=None,
+    help=(
+        "Wave 6 #21: optional MIME type label for the artifact "
+        "(e.g. application/pdf)."
+    ),
+)
+@click.option(
+    "--artifact-filename", "artifact_filename",
+    type=str, default=None,
+    help=(
+        "Wave 6 #21: optional human-readable filename label. "
+        "Defaults to the basename of --artifact when not set."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 6 #22 (2026-08-02) - idempotency-collapse
+# ---------------------------------------------------------------------------
+@click.option(
+    "--idempotency-principal", "idempotency_principal",
+    type=str, default=None,
+    help=(
+        "Wave 6 #22: principal string (e.g. compliance-officer-1). "
+        "Combined with --idempotency-scope / --idempotency-tool-version "
+        "/ --idempotency-argument-hash into the 4-tuple digest that "
+        "keys the collapse. Triggers POST "
+        "/v1/etch-chain/idempotency-collapse."
+    ),
+)
+@click.option(
+    "--idempotency-scope", "idempotency_scope",
+    type=str, default=None,
+    help="Wave 6 #22: scope label (e.g. kyc-decisions).",
+)
+@click.option(
+    "--idempotency-tool-version", "idempotency_tool_version",
+    type=str, default=None,
+    help="Wave 6 #22: tool version label (e.g. 1.4.2).",
+)
+@click.option(
+    "--idempotency-argument-hash", "idempotency_argument_hash",
+    type=str, default=None,
+    help=(
+        "Wave 6 #22: sha256:<64-hex> digest of the operation's "
+        "argument set. Client-side content hash of whatever inputs "
+        "define the operation's identity."
+    ),
+)
+# ---------------------------------------------------------------------------
+# Wave 6 #23 (2026-08-02) - learning-persistence
+# ---------------------------------------------------------------------------
+@click.option(
+    "--learning-from-event", "learning_from_event",
+    type=str, default=None,
+    help=(
+        "Wave 6 #23: OSS event id of the PRIOR decision that "
+        "spawned the learning. Triggers POST "
+        "/v1/etch-chain/learning-persistence. Requires "
+        "--learning-content-hash + --learning-propagation."
+    ),
+)
+@click.option(
+    "--learning-content-hash", "learning_content_hash",
+    type=str, default=None,
+    help=(
+        "Wave 6 #23: sha256:<64-hex> of the lesson content "
+        "(policy diff, added example, revised threshold, ...). "
+        "Client-side content hash - raw content stays out of Etch."
+    ),
+)
+@click.option(
+    "--learning-propagation", "learning_propagation",
+    type=click.Choice((
+        "override_prior", "augment_prior", "deprecate_prior",
+    )),
+    default=None,
+    help=(
+        "Wave 6 #23: how the new learning relates to the prior "
+        "policy. override_prior = replace; augment_prior = layer on "
+        "top; deprecate_prior = sunset without replacement (require "
+        "escalation)."
+    ),
+)
+@click.option(
+    "--learning-scope", "learning_scope",
+    type=str, default=None,
+    help=(
+        "Wave 6 #23: optional scope label the learning applies to "
+        "(e.g. kyc-decisions)."
+    ),
+)
+@click.option(
+    "--learning-attested-by", "learning_attested_by",
+    type=str, default=None,
+    help=(
+        "Wave 6 #23: optional signer id (e.g. "
+        "compliance-officer-1)."
+    ),
+)
 @click.version_option(__version__, prog_name="etch-record")
 def main(
     description: str,
@@ -1020,6 +1146,18 @@ def main(
     custody_export_session: str | None,
     custody_export_declaration_regime: str | None,
     custody_export_out: Path | None,
+    artifact_path: Path | None,
+    artifact_content_type: str | None,
+    artifact_filename: str | None,
+    idempotency_principal: str | None,
+    idempotency_scope: str | None,
+    idempotency_tool_version: str | None,
+    idempotency_argument_hash: str | None,
+    learning_from_event: str | None,
+    learning_content_hash: str | None,
+    learning_propagation: str | None,
+    learning_scope: str | None,
+    learning_attested_by: str | None,
 ) -> None:
     # Wave 2 #8 — bulk import mode. Runs the file through the format
     # adapter server-side; single-event flow is completely skipped
@@ -1401,6 +1539,188 @@ def main(
                 indent=2, sort_keys=True,
             ))
             click.echo(f"    wrote bundle to {custody_export_out}")
+
+    # Wave 6 #21 - artifact-hash. Independent.
+    artifact_payload = _prepare_artifact_hash(
+        artifact_path, artifact_content_type, artifact_filename,
+    )
+    if artifact_payload is not None:
+        try:
+            r = record_artifact_hash(
+                cfg=cfg, oss_event_id=event_id,
+                artifact=artifact_payload,
+            )
+        except ArtifactHashError as exc:
+            click.echo(
+                f"etch-record: artifact-hash: {exc}", err=True,
+            )
+            sys.exit(18)
+        click.echo(
+            f"OK  artifact_hash_seq={r.etch_chain_seq}  "
+            f"artifact_sha256_hex={r.artifact_sha256_hex}",
+        )
+
+    # Wave 6 #22 - idempotency-collapse. Independent.
+    collapse_payload = _prepare_idempotency_collapse(
+        idempotency_principal, idempotency_scope,
+        idempotency_tool_version, idempotency_argument_hash,
+    )
+    if collapse_payload is not None:
+        try:
+            r = record_idempotency_collapse(
+                cfg=cfg, oss_event_id=event_id,
+                collapse=collapse_payload,
+            )
+        except IdempotencyCollapseError as exc:
+            click.echo(
+                f"etch-record: idempotency-collapse: {exc}",
+                err=True,
+            )
+            sys.exit(19)
+        click.echo(
+            f"OK  idempotency_collapse_seq={r.etch_chain_seq}  "
+            f"idempotency_key={r.idempotency_key}  "
+            f"collapse_count={r.collapse_count}  "
+            f"previous_seq={r.previous_seq}",
+        )
+
+    # Wave 6 #23 - learning-persistence. Independent.
+    learning_payload = _prepare_learning_persistence(
+        learning_from_event, learning_content_hash,
+        learning_propagation, learning_scope,
+        learning_attested_by,
+    )
+    if learning_payload is not None:
+        try:
+            r = record_learning_persistence(
+                cfg=cfg, oss_event_id=event_id,
+                learning=learning_payload,
+            )
+        except LearningPersistenceError as exc:
+            click.echo(
+                f"etch-record: learning-persistence: {exc}",
+                err=True,
+            )
+            sys.exit(20)
+        click.echo(
+            f"OK  learning_persistence_seq={r.etch_chain_seq}  "
+            f"propagation_semantics={r.propagation_semantics}",
+        )
+
+
+def _prepare_artifact_hash(
+    artifact_path: Path | None,
+    content_type: str | None,
+    filename: str | None,
+) -> dict | None:
+    if artifact_path is None:
+        if content_type is not None or filename is not None:
+            raise click.UsageError(
+                "Wave 6 #21 artifact-hash requires: --artifact "
+                "(the metadata flags are optional companions)",
+            )
+        return None
+    import hashlib
+    h = hashlib.sha256()
+    size = 0
+    with open(artifact_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+            size += len(chunk)
+    payload = {
+        "sha256_hex": h.hexdigest(),
+        "size_bytes": size,
+        "attested_at": utc_iso_ms_now(),
+        "filename": filename or artifact_path.name,
+    }
+    if content_type is not None:
+        payload["content_type"] = content_type
+    return payload
+
+
+def _prepare_idempotency_collapse(
+    principal: str | None,
+    scope: str | None,
+    tool_version: str | None,
+    argument_hash: str | None,
+) -> dict | None:
+    provided = any((
+        principal, scope, tool_version, argument_hash,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if principal is None:
+        missing.append("--idempotency-principal")
+    if scope is None:
+        missing.append("--idempotency-scope")
+    if tool_version is None:
+        missing.append("--idempotency-tool-version")
+    if argument_hash is None:
+        missing.append("--idempotency-argument-hash")
+    if missing:
+        raise click.UsageError(
+            "Wave 6 #22 idempotency-collapse requires all four "
+            "components of the 4-tuple: "
+            + ", ".join(missing),
+        )
+    import hashlib
+    import json as _json
+    key_material = {
+        "principal": principal,
+        "scope": scope,
+        "tool_version": tool_version,
+        "argument_hash": argument_hash,
+    }
+    canonical = _json.dumps(
+        key_material, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    key = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    return {
+        "idempotency_key": key,
+        "principal": principal,
+        "scope": scope,
+        "tool_version": tool_version,
+        "argument_hash": argument_hash,
+        "attested_at": utc_iso_ms_now(),
+    }
+
+
+def _prepare_learning_persistence(
+    from_event: str | None,
+    content_hash: str | None,
+    propagation: str | None,
+    scope: str | None,
+    attested_by: str | None,
+) -> dict | None:
+    provided = any((
+        from_event, content_hash, propagation, scope, attested_by,
+    ))
+    if not provided:
+        return None
+    missing = []
+    if from_event is None:
+        missing.append("--learning-from-event")
+    if content_hash is None:
+        missing.append("--learning-content-hash")
+    if propagation is None:
+        missing.append("--learning-propagation")
+    if missing:
+        raise click.UsageError(
+            "Wave 6 #23 learning-persistence requires: "
+            + ", ".join(missing),
+        )
+    payload = {
+        "learned_from_event_id": from_event,
+        "learning_content_hash": content_hash,
+        "propagation_semantics": propagation,
+        "attested_at": utc_iso_ms_now(),
+    }
+    if scope is not None:
+        payload["applies_to_scope"] = scope
+    if attested_by is not None:
+        payload["attested_by"] = attested_by
+    return payload
 
 
 def _custody_export_wanted(

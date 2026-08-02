@@ -3,6 +3,61 @@
 All notable changes to `etch-record` (the CLI helper for the Etch signed
 audit chain).
 
+## v0.11.0 - 2026-08-02
+
+Wave 6 COMPLETE. MASTER PLAN 23 OF 23 SHIPPED (100%). Adds the
+final three sub-record clients: artifact-hash (#21),
+idempotency-collapse (#22), learning-persistence (#23). Sixteen
+endpoints total across Waves 1-6.
+
+Server-side dependency: etch commit shipping the three new
+endpoints (POST /v1/etch-chain/artifact-hash,
+/idempotency-collapse, /learning-persistence).
+
+### Added
+
+Wave 6 #21 artifact-hash (SHA-256 of a file into a chain-signed
+artifact_hash row - Chris Campbell shape):
+
+- `--artifact <path>` - client reads the file, computes SHA-256
+  in 1MB chunks, and posts only the digest. Raw bytes never leave
+  the machine.
+- `--artifact-content-type <mime>` - optional MIME label.
+- `--artifact-filename <label>` - optional filename label
+  (defaults to basename of --artifact).
+
+Wave 6 #22 idempotency-collapse (retry-storm dedup keyed on the
+4-tuple digest):
+
+- `--idempotency-principal <str>` - REQUIRED with any other
+  --idempotency-* flag.
+- `--idempotency-scope <str>` - REQUIRED.
+- `--idempotency-tool-version <str>` - REQUIRED.
+- `--idempotency-argument-hash <sha256:...>` - REQUIRED.
+- All four together form `sha256(canonical_json({principal, scope,
+  tool_version, argument_hash}))`, which is the idempotency_key
+  the server uses to look up prior rows and emit an incremented
+  collapse_count + previous_seq pointer.
+
+Wave 6 #23 learning-persistence (cross-session signed knowledge
+updates):
+
+- `--learning-from-event <oss-event-id>` - the PRIOR OSS event
+  the learning came from. Triggers POST
+  /v1/etch-chain/learning-persistence.
+- `--learning-content-hash <sha256:...>` - hash of the lesson
+  content (policy diff, added example, revised threshold).
+- `--learning-propagation <override_prior|augment_prior|deprecate_prior>` -
+  how the new learning relates to the prior policy.
+- `--learning-scope <str>` - optional scope label.
+- `--learning-attested-by <str>` - optional signer id.
+
+### Exit codes added
+
+- `18` artifact-hash sub-record failed
+- `19` idempotency-collapse sub-record failed
+- `20` learning-persistence sub-record failed
+
 ## v0.10.0 - 2026-08-02
 
 Wave 5 COMPLETE. Adds the chain-of-custody export bundle client
